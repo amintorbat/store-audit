@@ -1,13 +1,14 @@
 import * as cheerio from "cheerio";
 
+type Page = cheerio.CheerioAPI;
+
 type CheckResult = {
   name: string;
   pass: boolean;
   detail: string;
 };
 
-function checkViewport(html: string): CheckResult {
-  const $ = cheerio.load(html);
+function checkViewport($: Page): CheckResult {
   const found = $('meta[name="viewport"]').length > 0;
 
   return {
@@ -19,8 +20,7 @@ function checkViewport(html: string): CheckResult {
   };
 }
 
-function checkTitle(html: string): CheckResult {
-  const $ = cheerio.load(html);
+function checkTitle($: Page): CheckResult {
   const title = $("title").first().text().trim();
   const len = title.length;
 
@@ -39,8 +39,7 @@ function checkTitle(html: string): CheckResult {
   };
 }
 
-function checkH1(html: string): CheckResult {
-  const $ = cheerio.load(html);
+function checkH1($: Page): CheckResult {
   const count = $("h1").length;
 
   return {
@@ -53,10 +52,10 @@ function checkH1(html: string): CheckResult {
   };
 }
 
-function checkImageAlt(html: string): CheckResult {
-  const $ = cheerio.load(html);
-  const total = $("img").length;
-  const missing = $("img").filter(
+function checkImageAlt($: Page): CheckResult {
+  const imgs = $("img");
+  const total = imgs.length;
+  const missing = imgs.filter(
     (_, el) => $(el).attr("alt") === undefined,
   ).length;
 
@@ -65,27 +64,42 @@ function checkImageAlt(html: string): CheckResult {
     pass: missing === 0,
     detail:
       missing === 0
-        ? `all ${total} image have alt`
+        ? `all ${total} images have alt`
         : `${missing} of ${total} images missing alt`,
   };
 }
 
 async function main() {
-  const url = process.argv[2];
+  let url = process.argv[2];
 
   if (!url) {
     console.log("Usage: npx tsx audit.ts <url>");
     return;
   }
+  if (!url.startsWith("https")) url = "https://" + url;
+  let html: string;
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "store-audit/0.1" },
+    });
 
-  const res = await fetch(url);
-  const html = await res.text();
+    if (!res.ok) {
+      console.log(`Could not load page: HTTP ${res.status}`);
+      return;
+    }
+    html = await res.text();
+  } catch {
+    console.log("Could not reach the site. Check the URL and your connection.");
+    return;
+  }
+
+  const $ = cheerio.load(html);
 
   const results = [
-    checkViewport(html),
-    checkTitle(html),
-    checkH1(html),
-    checkImageAlt(html),
+    checkViewport($),
+    checkTitle($),
+    checkH1($),
+    checkImageAlt($),
   ];
 
   for (const r of results) {
