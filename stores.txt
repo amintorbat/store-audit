@@ -1,0 +1,11 @@
+# dev test (known small brands)
+hiutdenim.co.uk
+partakefoods.com
+studioneat.com
+jungalow.com
+littleotsu.com
+
+# outreach (owners asked for feedback publicly)
+ballisoulstudio.com
+tinynestluxury.store
+alwayssummershop.co.uk

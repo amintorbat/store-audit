@@ -8,7 +8,7 @@
  *  4. runAudit(url): fetch + run all checks, returns AuditReport (never prints)
  *  5. main(): read argv, call runAudit, print the report
  *
- *  * Done: viewport, title, h1, image alt, meta description, product schema,
+ * Done: viewport, title, h1, image alt, meta description, product schema,
  *       error handling, redirect warning, final URL, all 6 checks registered
  *       (h1 count on example.com verified with the browser: tool was right)
  *
@@ -22,6 +22,7 @@
  */
 
 import * as cheerio from "cheerio";
+import { readFileSync } from "node:fs";
 
 type Page = cheerio.CheerioAPI;
 
@@ -37,6 +38,8 @@ type AuditReport = {
   results: CheckResult[];
   passed: number;
 };
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function normalizeUrl(input: string): string {
   return /^https?:\/\//i.test(input) ? input : "https://" + input;
@@ -146,6 +149,13 @@ function checkProductSchema($: Page): CheckResult {
   };
 }
 
+function readStores(path: string): string[] {
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+}
+
 // Returns data only (no console.log) so a web page can reuse this later.
 async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
@@ -164,7 +174,6 @@ async function runAudit(input: string): Promise<AuditReport> {
     checkH1($),
     checkImageAlt($),
     checkMetaDescription($),
-    checkProductSchema($),
   ];
 
   if (isProductPage) results.push(checkProductSchema($));
@@ -177,6 +186,21 @@ async function runAudit(input: string): Promise<AuditReport> {
   };
 }
 
+async function runBatch(path: string) {
+  for (const site of readStores(path)) {
+    try {
+      const rep = await runAudit(site);
+      const failed = rep.results.filter((r) => !r.pass).map((r) => r.name);
+      console.log(
+        `${site} | ${rep.passed}/${rep.results.length} | fails: ${failed.join(", ") || "none"}`,
+      );
+    } catch (e) {
+      console.log(`${site} | ERROR: ${(e as Error).message}`);
+    }
+    await sleep(1500);
+  }
+}
+
 // Strips "www." so kith.com <-> www.kith.com is not flagged as a redirect.
 function hostOf(u: string): string {
   return new URL(u).hostname.replace(/^www\./, "");
@@ -187,6 +211,11 @@ async function main() {
 
   if (!input) {
     console.log("Usage: npx tsx audit.ts <url>");
+    return;
+  }
+
+  if (input === "--batch") {
+    await runBatch(process.argv[3] ?? "stores.txt");
     return;
   }
 
