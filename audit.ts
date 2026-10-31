@@ -8,15 +8,17 @@
  *  4. runAudit(url): fetch + run all checks, returns AuditReport (never prints)
  *  5. main(): read argv, call runAudit, print the report
  *
- * Done: viewport, title, h1, image alt, meta description, product schema,
- *       error handling, redirect warning, final URL in report
+ *  * Done: viewport, title, h1, image alt, meta description, product schema,
+ *       error handling, redirect warning, final URL, all 6 checks registered
+ *       (h1 count on example.com verified with the browser: tool was right)
  *
  * TODO (P1 = needed before the Nov 9 event, P3 = after):
- *  - P1 step 1: register checkMetaDescription + checkProductSchema in runAudit
- *  - P1 step 2: verify the h1 count on example.com with curl (tool vs reality)
- *  - P2 step 3: add a --json flag to main so a web page can reuse the output
- *  - P2 step 4: simple Vercel page that calls runAudit and shows the report
- *  - P3 step 5: render JS-heavy pages with Playwright (fetch only sees raw HTML)
+ *  - P1 step 1: product schema only on /products/ pages (no unfair FAILs)
+ *  - P1 step 2: batch mode: read stores.txt, print one line per store
+ *  - P1 step 3: scan 10 real small stores, collect results for the outreach
+ *  - P2 step 4: add a --json flag to main so a web page can reuse the output
+ *  - P2 step 5: simple Vercel page that calls runAudit and shows the report
+ *  - P3 step 6: render JS-heavy pages with Playwright (fetch only sees raw HTML)
  */
 
 import * as cheerio from "cheerio";
@@ -150,12 +152,13 @@ async function runAudit(input: string): Promise<AuditReport> {
   const res = await fetch(url, {
     headers: { "User-Agent": "store-audit/0.1" },
   });
+  const isProductPage = /\/products?\//i.test(res.url);
 
   const body = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
   const $ = cheerio.load(body);
-  const results = [
+  const results: CheckResult[] = [
     checkViewport($),
     checkTitle($),
     checkH1($),
@@ -163,6 +166,9 @@ async function runAudit(input: string): Promise<AuditReport> {
     checkMetaDescription($),
     checkProductSchema($),
   ];
+
+  if (isProductPage) results.push(checkProductSchema($));
+
   return {
     url,
     finalUrl: res.url,
