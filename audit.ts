@@ -1,3 +1,24 @@
+/**
+ * store-audit: CLI that audits one ecommerce page (SEO and mobile basics).
+ *
+ * Structure (top to bottom):
+ *  1. Types: CheckResult, AuditReport
+ *  2. Helpers: normalizeUrl, hostOf
+ *  3. Checks: one function per rule, each takes cheerio ($) and returns CheckResult
+ *  4. runAudit(url): fetch + run all checks, returns AuditReport (never prints)
+ *  5. main(): read argv, call runAudit, print the report
+ *
+ * Done: viewport, title, h1, image alt, meta description, product schema,
+ *       error handling, redirect warning, final URL in report
+ *
+ * TODO (P1 = needed before the Nov 9 event, P3 = after):
+ *  - P1 step 1: register checkMetaDescription + checkProductSchema in runAudit
+ *  - P1 step 2: verify the h1 count on example.com with curl (tool vs reality)
+ *  - P2 step 3: add a --json flag to main so a web page can reuse the output
+ *  - P2 step 4: simple Vercel page that calls runAudit and shows the report
+ *  - P3 step 5: render JS-heavy pages with Playwright (fetch only sees raw HTML)
+ */
+
 import * as cheerio from "cheerio";
 
 type Page = cheerio.CheerioAPI;
@@ -123,6 +144,7 @@ function checkProductSchema($: Page): CheckResult {
   };
 }
 
+// Returns data only (no console.log) so a web page can reuse this later.
 async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
   const res = await fetch(url, {
@@ -138,6 +160,8 @@ async function runAudit(input: string): Promise<AuditReport> {
     checkTitle($),
     checkH1($),
     checkImageAlt($),
+    checkMetaDescription($),
+    checkProductSchema($),
   ];
   return {
     url,
@@ -147,6 +171,7 @@ async function runAudit(input: string): Promise<AuditReport> {
   };
 }
 
+// Strips "www." so kith.com <-> www.kith.com is not flagged as a redirect.
 function hostOf(u: string): string {
   return new URL(u).hostname.replace(/^www\./, "");
 }
