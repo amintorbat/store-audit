@@ -8,6 +8,17 @@ type CheckResult = {
   detail: string;
 };
 
+type AuditReport = {
+  url: string;
+  finalUrl: string;
+  results: CheckResult[];
+  passed: number;
+};
+
+function normalizeUrl(input: string): string {
+  return /^https?:\/\//i.test(input) ? input : "https://" + input;
+}
+
 function checkViewport($: Page): CheckResult {
   const found = $('meta[name="viewport"]').length > 0;
 
@@ -55,6 +66,9 @@ function checkH1($: Page): CheckResult {
 function checkImageAlt($: Page): CheckResult {
   const imgs = $("img");
   const total = imgs.length;
+  if (total === 0) {
+    return { name: "image alt", pass: true, detail: "no images found" };
+  }
   const missing = imgs.filter(
     (_, el) => $(el).attr("alt") === undefined,
   ).length;
@@ -69,41 +83,57 @@ function checkImageAlt($: Page): CheckResult {
   };
 }
 
-async function main() {
-  let url = process.argv[2];
+async function runAudit(input: string): Promise<AuditReport> {
+  const url = normalizeUrl(input);
+  const res = await fetch(url, {
+    headers: { "User-Agent": "store-audit/0.1" },
+  });
 
-  if (!url) {
-    console.log("Usage: npx tsx audit.ts <url>");
-    return;
-  }
-  if (!url.startsWith("https")) url = "https://" + url;
-  let html: string;
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "store-audit/0.1" },
-    });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-    if (!res.ok) {
-      console.log(`Could not load page: HTTP ${res.status}`);
-      return;
-    }
-    html = await res.text();
-  } catch {
-    console.log("Could not reach the site. Check the URL and your connection.");
-    return;
-  }
-
-  const $ = cheerio.load(html);
-
+  const $ = cheerio.load(body);
   const results = [
     checkViewport($),
     checkTitle($),
     checkH1($),
     checkImageAlt($),
   ];
+  return {
+    url,
+    finalUrl: res.url,
+    results,
+    passed: results.filter((r) => r.pass).length,
+  };
+}
 
-  for (const r of results) {
-    console.log(`${r.pass ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
+function hostOf(u: string): string {
+  return new URL(u).hostname.replace(/^www\./, "");
+}
+
+async function main() {
+  const input = process.argv[2];
+
+  if (!input) {
+    console.log("Usage: npx tsx audit.ts <url>");
+    return;
+  }
+
+  try {
+    const report = await runAudit(input);
+    console.log(`Audited: ${report.finalUrl}`);
+
+    if (hostOf(report.finalUrl) !== hostOf(report.url)) {
+      console.log(
+        `Warning: redirected from ${hostOf(report.url)} to ${hostOf(report.finalUrl)}; results may be for a different page.`,
+      );
+    }
+    for (const r of report.results) {
+      console.log(`${r.pass ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
+    }
+    console.log(`Score: ${report.passed}/${report.results.length} passed`);
+  } catch (e) {
+    console.log(`Could not audit site: ${(e as Error).message}`);
   }
 }
 
