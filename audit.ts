@@ -83,6 +83,46 @@ function checkImageAlt($: Page): CheckResult {
   };
 }
 
+function checkMetaDescription($: Page): CheckResult {
+  const desc = $('meta[name="description"]').attr("content")?.trim() ?? "";
+  const len = desc.length;
+
+  if (len === 0) {
+    return {
+      name: "meta description",
+      pass: false,
+      detail: "missing meta description",
+    };
+  }
+
+  const ok = len >= 70 && len <= 160;
+  return {
+    name: "meta description",
+    pass: ok,
+    detail: ok ? `length OK (${len} chars)` : `${len} chars; aim for 70-160`,
+  };
+}
+
+function checkProductSchema($: Page): CheckResult {
+  const found = $('script[type="application/ld+json"]')
+    .toArray()
+    .some((el) => {
+      try {
+        return JSON.stringify(JSON.parse($(el).text())).includes('"Product"');
+      } catch {
+        return false;
+      }
+    });
+
+  return {
+    name: "product schema",
+    pass: found,
+    detail: found
+      ? "Product structured data found"
+      : "no Product structured data (only matters on product pages)",
+  };
+}
+
 async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
   const res = await fetch(url, {
