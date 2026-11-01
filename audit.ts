@@ -12,13 +12,17 @@
  *       error handling, redirect warning, final URL, all 6 checks registered
  *       (h1 count on example.com verified with the browser: tool was right)
  *
- * TODO (P1 = needed before the Nov 9 event, P3 = after):
- *  - P1 step 1: product schema only on /products/ pages (no unfair FAILs)
- *  - P1 step 2: batch mode: read stores.txt, print one line per store
- *  - P1 step 3: scan 10 real small stores, collect results for the outreach
- *  - P2 step 4: add a --json flag to main so a web page can reuse the output
- *  - P2 step 5: simple Vercel page that calls runAudit and shows the report
- *  - P3 step 6: render JS-heavy pages with Playwright (fetch only sees raw HTML)
+ *  * Done: 6 checks (viewport, title, h1, image alt, meta description, product schema
+ *       on /products/ pages), error handling, redirect warning, batch mode (--batch)
+ *
+ * TODO (P1 = before the Nov 9 event, P2 = if time, P3 = after):
+ *  - P1 step 1: timeout + explainError (clear network errors)
+ *  - P1 step 2: checkAiCrawlers (robots.txt: search bots vs training bots)
+ *  - P1 step 3: severity per check + "Top 3 fixes" summary
+ *  - P1 step 4: scan 10-15 real small stores, pick 3 reports to show
+ *  - P2 step 5: split into core (export) + cli, add --json
+ *  - P2 step 6: Vercel page + block private/internal URLs (security)
+ *  - P3 step 7: Playwright render, PageSpeed Insights, content freshness checks
  */
 
 import * as cheerio from "cheerio";
@@ -40,6 +44,15 @@ type AuditReport = {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const res = await fetch(url, {
+  headers: { "User-Agent": "store-audit/0.1" },
+  signal: AbortSignal.timeout(10_000),
+});
+
+// Answer engines: blocking them means no citations. Training bots: blocking is a legit choice.
+const AI_SEARCH_BOTS = ["OAI-SearchBot", "PerplexityBot"];
+const AI_TRAINING_BOTS = ["GPTBot", "ClaudeBot", "Google-Extended", "CCBot"];
 
 function normalizeUrl(input: string): string {
   return /^https?:\/\//i.test(input) ? input : "https://" + input;
@@ -156,6 +169,79 @@ function readStores(path: string): string[] {
     .filter((l) => l && !l.startsWith("#"));
 }
 
+// Turns Node's vague "fetch failed" into a sentence an owner can act on.
+function explainError(e: unknown): string {
+  const err = e as Error & { cause?: { code?: string } };
+  const code = err.cause?.code;
+
+  if (err.name === "TimeError") return "site took too long (over 10s)";
+  if (code === "ENOTFOUND") return "domain not found (check the spelling)";
+  if (code) return `network error (${code})`;
+  return err.message;
+}
+
+// Simplified parser: groups User-agent lines with their Disallow rules.
+// Limitation: ignores "Allow" lines, so partial blocks may be over-reported.
+function parseRobots(text: string): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  let agents: string[] = [];
+  let sawRule = false;
+  for (const raw of text.split("\n")) {
+    const line = raw.split("#")[0].trim();
+    const i = line.indexOf(":");
+    if (i === -1) continue;
+    const key = line.slice(0, i).trim().toLowerCase();
+    const val = line.slice(i + 1).trim();
+    if (key === "user-agent") {
+      if (sawRule) {
+        agents = [];
+        sawRule = false;
+      }
+      const a = val.toLowerCase();
+      agents.push(a);
+      if (!groups.has(a)) groups.set(a, []);
+    } else if (key === "disallow" || key === "allow") {
+      sawRule = true;
+      if (key === "disallow") for (const a of agents) groups.get(a)!.push(val);
+    }
+  }
+  return groups;
+}
+
+// A bot's own group wins; otherwise the "*" group applies.
+function isBlocked(groups: Map<string, string[]>, bot: string): boolean {
+  const rules = groups.get(bot.toLowerCase()) ?? groups.get("*") ?? [];
+  return rules.includes("/");
+}
+
+function checkAiCrawlers(robots: string | null): CheckResult {
+  if (robots === null) {
+    return {
+      name: "AI crawlers",
+      pass: true,
+      detail: "no robots.txt (nothing blocked)",
+    };
+  }
+  const groups = parseRobots(robots);
+  const blockedSearch = AI_SEARCH_BOTS.filter((b) => isBlocked(groups, b));
+  const blockedTraining = AI_TRAINING_BOTS.filter((b) => isBlocked(groups, b));
+
+  if (blockedSearch.length > 0) {
+    return {
+      name: "AI crawlers",
+      pass: false,
+      detail: `robots.txt blocks AI search bots (${blockedSearch.join(", ")}): pages can't be cited by ChatGPT search / Perplexity`,
+    };
+  }
+  return {
+    name: "AI crawlers",
+    pass: true,
+    detail: blockedTraining.length
+      ? `AI search bots allowed; training bots blocked (${blockedTraining.join(", ")}), fine if intentional`
+      : "AI search bots allowed",
+  };
+}
+
 // Returns data only (no console.log) so a web page can reuse this later.
 async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
@@ -176,7 +262,10 @@ async function runAudit(input: string): Promise<AuditReport> {
     checkMetaDescription($),
   ];
 
+  const robots = await fetchRobots(new URL(res.url).origin);
   if (isProductPage) results.push(checkProductSchema($));
+
+  results.push(checkAiCrawlers(robots));
 
   return {
     url,
@@ -195,9 +284,21 @@ async function runBatch(path: string) {
         `${site} | ${rep.passed}/${rep.results.length} | fails: ${failed.join(", ") || "none"}`,
       );
     } catch (e) {
-      console.log(`${site} | ERROR: ${(e as Error).message}`);
+      console.log(`${site} | ERROR: ${explainError(e)}`);
     }
     await sleep(1500);
+  }
+}
+
+async function fetchRobots(origin: string): Promise<string | null> {
+  try {
+    const res = await fetch(origin + "/robots.txt", {
+      headers: { "User-Agent": "store-audit/0.1" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
   }
 }
 
@@ -233,7 +334,7 @@ async function main() {
     }
     console.log(`Score: ${report.passed}/${report.results.length} passed`);
   } catch (e) {
-    console.log(`Could not audit site: ${(e as Error).message}`);
+    console.log(`Could not audit site: ${explainError(e)}`);
   }
 }
 
