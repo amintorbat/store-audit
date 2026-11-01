@@ -12,17 +12,16 @@
  *       error handling, redirect warning, final URL, all 6 checks registered
  *       (h1 count on example.com verified with the browser: tool was right)
  *
- *  * Done: 6 checks (viewport, title, h1, image alt, meta description, product schema
- *       on /products/ pages), error handling, redirect warning, batch mode (--batch)
+ * Done: 7 checks (viewport, title, h1, image alt, meta description, AI crawlers,
+ *       product schema on /products/ pages), timeout + clear errors, batch mode
  *
  * TODO (P1 = before the Nov 9 event, P2 = if time, P3 = after):
- *  - P1 step 1: timeout + explainError (clear network errors)
- *  - P1 step 2: checkAiCrawlers (robots.txt: search bots vs training bots)
- *  - P1 step 3: severity per check + "Top 3 fixes" summary
- *  - P1 step 4: scan 10-15 real small stores, pick 3 reports to show
- *  - P2 step 5: split into core (export) + cli, add --json
- *  - P2 step 6: Vercel page + block private/internal URLs (security)
- *  - P3 step 7: Playwright render, PageSpeed Insights, content freshness checks
+ *  - P1 step 1: severity table + "Top 3 fixes" summary
+ *  - P1 step 2: scan 10-15 real small stores, pick 3 reports to show
+ *  - P1 step 3: split into core (export) + cli, add --json
+ *  - P1 step 4: Vercel page (input, score, top 3 fixes, check list)
+ *  - P1 step 5: block private/internal URLs before publishing the page
+ *  - P3 step 6: Playwright render, PageSpeed Insights, content freshness checks
  */
 
 import * as cheerio from "cheerio";
@@ -41,14 +40,24 @@ type AuditReport = {
   finalUrl: string;
   results: CheckResult[];
   passed: number;
+  topFixes: CheckResult[];
 };
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type Severity = "high" | "medium" | "low";
 
-const res = await fetch(url, {
-  headers: { "User-Agent": "store-audit/0.1" },
-  signal: AbortSignal.timeout(10_000),
-});
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const WEIGHT: Record<Severity, number> = { high: 3, medium: 2, low: 1 };
+
+// Policy lives in one table so it is easy to tune after real feedback (my judgment, not a standard).
+const SEVERITY: Record<string, Severity> = {
+  viewport: "high", // broken on phones = lost sales
+  "AI crawlers": "high", // invisible to AI search answers
+  title: "medium",
+  h1: "medium",
+  "product schema": "medium",
+  "meta description": "low",
+  "image alt": "low",
+};
 
 // Answer engines: blocking them means no citations. Training bots: blocking is a legit choice.
 const AI_SEARCH_BOTS = ["OAI-SearchBot", "PerplexityBot"];
@@ -174,7 +183,7 @@ function explainError(e: unknown): string {
   const err = e as Error & { cause?: { code?: string } };
   const code = err.cause?.code;
 
-  if (err.name === "TimeError") return "site took too long (over 10s)";
+  if (err.name === "TimeoutError") return "site took too long (over 10s)";
   if (code === "ENOTFOUND") return "domain not found (check the spelling)";
   if (code) return `network error (${code})`;
   return err.message;
@@ -242,12 +251,24 @@ function checkAiCrawlers(robots: string | null): CheckResult {
   };
 }
 
+function topFixes(results: CheckResult[], n = 3): CheckResult[] {
+  return results
+    .filter((r) => !r.pass) // filter returns a new array, so sort won't touch the original
+    .sort(
+      (a, b) =>
+        WEIGHT[SEVERITY[b.name] ?? "low"] - WEIGHT[SEVERITY[a.name] ?? "low"],
+    )
+    .slice(0, n);
+}
+
 // Returns data only (no console.log) so a web page can reuse this later.
 async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
   const res = await fetch(url, {
     headers: { "User-Agent": "store-audit/0.1" },
+    signal: AbortSignal.timeout(10_000),
   });
+
   const isProductPage = /\/products?\//i.test(res.url);
 
   const body = await res.text();
@@ -272,6 +293,7 @@ async function runAudit(input: string): Promise<AuditReport> {
     finalUrl: res.url,
     results,
     passed: results.filter((r) => r.pass).length,
+    topFixes: topFixes(results),
   };
 }
 
@@ -333,6 +355,12 @@ async function main() {
       console.log(`${r.pass ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
     }
     console.log(`Score: ${report.passed}/${report.results.length} passed`);
+    
+    if (report.topFixes.length > 0) {
+      console.log("Fix first:");
+      for (const f of report.topFixes)
+        console.log(`  - ${f.name}: ${f.detail}`);
+    }
   } catch (e) {
     console.log(`Could not audit site: ${explainError(e)}`);
   }
