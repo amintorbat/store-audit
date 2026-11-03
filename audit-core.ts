@@ -19,19 +19,19 @@
  */
 
 import * as cheerio from "cheerio";
-import { readFileSync } from "node:fs";
 
 type Page = cheerio.CheerioAPI;
 
-type CheckResult = {
+export type CheckResult = {
   name: string;
   pass: boolean;
   detail: string;
 };
 
-type AuditReport = {
+export type AuditReport = {
   url: string;
   finalUrl: string;
+  redirected: boolean;
   results: CheckResult[];
   passed: number;
   topFixes: CheckResult[];
@@ -39,7 +39,6 @@ type AuditReport = {
 
 type Severity = "high" | "medium" | "low";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const WEIGHT: Record<Severity, number> = { high: 3, medium: 2, low: 1 };
 
 // Policy lives in one table so it is easy to tune after real feedback (my judgment, not a standard).
@@ -60,6 +59,12 @@ const AI_TRAINING_BOTS = ["GPTBot", "ClaudeBot", "Google-Extended", "CCBot"];
 function normalizeUrl(input: string): string {
   return /^https?:\/\//i.test(input) ? input : "https://" + input;
 }
+
+// Strips "www." so kith.com <-> www.kith.com is not flagged as a redirect.
+function hostOf(u: string): string {
+  return new URL(u).hostname.replace(/^www\./, "");
+}
+
 
 function checkViewport($: Page): CheckResult {
   const found = $('meta[name="viewport"]').length > 0;
@@ -165,20 +170,17 @@ function checkProductSchema($: Page): CheckResult {
   };
 }
 
-function readStores(path: string): string[] {
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("#"));
-}
-
 // Turns Node's vague "fetch failed" into a sentence an owner can act on.
-function explainError(e: unknown): string {
+export function explainError(e: unknown): string {
   const err = e as Error & { cause?: { code?: string } };
   const code = err.cause?.code;
 
   if (err.name === "TimeoutError") return "site took too long (over 10s)";
   if (code === "ENOTFOUND") return "domain not found (check the spelling)";
+  if (code === "ECONNRESET")
+    return "site closed the connection (down, or blocking bots)";
+  if (code?.startsWith("ERR_SSL"))
+    return "HTTPS handshake failed (the site's SSL setup may be broken)";
   if (code) return `network error (${code})`;
   return err.message;
 }
@@ -245,6 +247,18 @@ function checkAiCrawlers(robots: string | null): CheckResult {
   };
 }
 
+async function fetchRobots(origin: string): Promise<string | null> {
+  try {
+    const res = await fetch(origin + "/robots.txt", {
+      headers: { "User-Agent": "store-audit/0.1" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
+  }
+}
+
 function topFixes(results: CheckResult[], n = 3): CheckResult[] {
   return results
     .filter((r) => !r.pass) // filter returns a new array, so sort won't touch the original
@@ -256,7 +270,7 @@ function topFixes(results: CheckResult[], n = 3): CheckResult[] {
 }
 
 // Returns data only (no console.log) so a web page can reuse this later.
-async function runAudit(input: string): Promise<AuditReport> {
+export async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
   const res = await fetch(url, {
     headers: { "User-Agent": "store-audit/0.1" },
@@ -282,82 +296,20 @@ async function runAudit(input: string): Promise<AuditReport> {
 
   results.push(checkAiCrawlers(robots));
 
+  const scored = results.map((r) => ({
+    ...r,
+    severity: SEVERITY[r.name] ?? ("low" as Severity),
+  }));
+
   return {
     url,
     finalUrl: res.url,
-    results,
-    passed: results.filter((r) => r.pass).length,
-    topFixes: topFixes(results),
+    redirected: hostOf(res.url) !== hostOf(url),
+    results: scored,
+    passed: scored.filter((r) => r.pass).length,
+    topFixes: topFixes(scored),
   };
 }
 
-async function runBatch(path: string) {
-  for (const site of readStores(path)) {
-    try {
-      const rep = await runAudit(site);
-      const failed = rep.results.filter((r) => !r.pass).map((r) => r.name);
-      console.log(
-        `${site} | ${rep.passed}/${rep.results.length} | fails: ${failed.join(", ") || "none"}`,
-      );
-    } catch (e) {
-      console.log(`${site} | ERROR: ${explainError(e)}`);
-    }
-    await sleep(1500);
-  }
-}
 
-async function fetchRobots(origin: string): Promise<string | null> {
-  try {
-    const res = await fetch(origin + "/robots.txt", {
-      headers: { "User-Agent": "store-audit/0.1" },
-      signal: AbortSignal.timeout(10_000),
-    });
-    return res.ok ? await res.text() : null;
-  } catch {
-    return null;
-  }
-}
 
-// Strips "www." so kith.com <-> www.kith.com is not flagged as a redirect.
-function hostOf(u: string): string {
-  return new URL(u).hostname.replace(/^www\./, "");
-}
-
-async function main() {
-  const input = process.argv[2];
-
-  if (!input) {
-    console.log("Usage: npx tsx audit.ts <url>");
-    return;
-  }
-
-  if (input === "--batch") {
-    await runBatch(process.argv[3] ?? "stores.txt");
-    return;
-  }
-
-  try {
-    const report = await runAudit(input);
-    console.log(`Audited: ${report.finalUrl}`);
-
-    if (hostOf(report.finalUrl) !== hostOf(report.url)) {
-      console.log(
-        `Warning: redirected from ${hostOf(report.url)} to ${hostOf(report.finalUrl)}; results may be for a different page.`,
-      );
-    }
-    for (const r of report.results) {
-      console.log(`${r.pass ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
-    }
-    console.log(`Score: ${report.passed}/${report.results.length} passed`);
-
-    if (report.topFixes.length > 0) {
-      console.log("Fix first:");
-      for (const f of report.topFixes)
-        console.log(`  - ${f.name}: ${f.detail}`);
-    }
-  } catch (e) {
-    console.log(`Could not audit site: ${explainError(e)}`);
-  }
-}
-
-main();
