@@ -1,27 +1,21 @@
 /**
- * store-audit: CLI that audits one ecommerce page (SEO and mobile basics).
+ * audit-core: the engine of store-audit. It never prints and never reads files,
+ * so both the CLI (cli.ts) and the web page (api/audit.ts) can reuse it.
  *
  * Structure (top to bottom):
- *  1. Types: CheckResult, AuditReport
- *  2. Helpers: normalizeUrl, hostOf
- *  3. Checks: one function per rule, each takes cheerio ($) and returns CheckResult
- *  4. runAudit(url): fetch + run all checks, returns AuditReport (never prints)
- *  5. main(): read argv, call runAudit, print the report
+ *  1. Types + severity table
+ *  2. Helpers: normalizeUrl, hostOf, explainError
+ *  3. Checks: one function per rule, each returns CheckResult
+ *  4. AI readiness: robots.txt parsing, fetchRobots, checkAiCrawlers
+ *  5. topFixes + runAudit (fetch, run checks, return AuditReport)
  *
- * Done: viewport, title, h1, image alt, meta description, product schema,
- *       error handling, redirect warning, final URL, all 6 checks registered
- *       (h1 count on example.com verified with the browser: tool was right)
- *
- * Done: 7 checks (viewport, title, h1, image alt, meta description, AI crawlers,
- *       product schema on /products/ pages), timeout + clear errors, batch mode
+ * Done: 7 checks, timeout + readable errors, severity + top fixes, redirect flag
  *
  * TODO (P1 = before the Nov 9 event, P2 = if time, P3 = after):
- *  - P1 step 1: severity table + "Top 3 fixes" summary
- *  - P1 step 2: scan 10-15 real small stores, pick 3 reports to show
- *  - P1 step 3: split into core (export) + cli, add --json
- *  - P1 step 4: Vercel page (input, score, top 3 fixes, check list)
- *  - P1 step 5: block private/internal URLs before publishing the page
- *  - P3 step 6: Playwright render, PageSpeed Insights, content freshness checks
+ *  - P1 step 1: Vercel function api/audit.ts + simple page (input, score, fixes)
+ *  - P1 step 2: block private/internal URLs before publishing the page
+ *  - P1 step 3: scan 10-15 real small stores, pick 3 reports to show
+ *  - P3 step 4: Playwright render, PageSpeed Insights, content freshness checks
  */
 
 import * as cheerio from "cheerio";
@@ -355,7 +349,7 @@ async function main() {
       console.log(`${r.pass ? "PASS" : "FAIL"} ${r.name}: ${r.detail}`);
     }
     console.log(`Score: ${report.passed}/${report.results.length} passed`);
-    
+
     if (report.topFixes.length > 0) {
       console.log("Fix first:");
       for (const f of report.topFixes)
