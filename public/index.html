@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Store Audit: SEO and AI-readiness check for online stores</title>
+  <meta name="description" content="Paste a store URL and get a plain-English audit: mobile, SEO basics and AI-search readiness, with the three fixes to do first." />
+  <style>
+    :root { --bg:#fafaf9; --card:#fff; --ink:#1c1917; --muted:#78716c; --line:#e7e5e4;
+            --good:#15803d; --warn:#b45309; --bad:#b91c1c; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+           font:16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width:720px; margin:0 auto; padding:48px 16px 80px; }
+    h1 { font-size:28px; margin:0 0 8px; }
+    h2 { font-size:18px; margin:0 0 8px; }
+    .sub { color:var(--muted); margin:0 0 24px; }
+    form { display:flex; gap:8px; }
+    input { flex:1; padding:12px 14px; font:inherit; border:1px solid var(--line); border-radius:10px; }
+    button { padding:12px 18px; font:inherit; font-weight:600; color:#fff; background:var(--ink);
+             border:0; border-radius:10px; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:wait; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; margin-top:20px; }
+    .score { font-size:48px; font-weight:700; line-height:1; }
+    .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+    .muted { color:var(--muted); font-size:14px; }
+    .row { display:flex; gap:10px; padding:10px 0; border-top:1px solid var(--line); }
+    .badge { font-size:12px; font-weight:600; padding:2px 8px; border:1px solid var(--line);
+             border-radius:99px; text-transform:uppercase; }
+    .error { border-color:var(--bad); color:var(--bad); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Store Audit</h1>
+    <p class="sub">Paste your store's URL. Get a plain-English check of mobile, SEO basics and AI-search readiness, plus the three fixes to do first.</p>
+
+    <!-- type="text" on purpose: people type "allbirds.com" without https:// -->
+    <form id="form">
+      <input id="url" type="text" placeholder="yourstore.com" autocomplete="off" aria-label="Store URL" />
+      <button type="submit">Audit</button>
+    </form>
+
+    <div id="out"></div>
+    <p class="muted">This checks the raw HTML a crawler receives. Most AI crawlers don't run JavaScript, but content that only appears after JavaScript runs isn't visible to this tool yet.</p>
+  </main>
+
+  <script>
+    const form = document.querySelector("#form");
+    const input = document.querySelector("#url");
+    const btn = form.querySelector("button");
+    const out = document.querySelector("#out");
+
+    // textContent only, never innerHTML: remote data (like finalUrl) stays inert text.
+    function el(tag, cls, text) {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text !== undefined) n.textContent = text;
+      return n;
+    }
+
+    function row(mark, c) {
+      const d = el("div", "row");
+      d.append(el("span", c.pass ? "good" : "bad", mark));
+      const body = el("div");
+      body.append(el("strong", "", c.name + " "), el("span", "badge", c.severity ?? "low"));
+      body.append(el("div", "muted", c.detail));
+      d.append(body);
+      return d;
+    }
+
+    function render(r) {
+      out.replaceChildren();
+
+      const ratio = r.passed / r.results.length;
+      const tone = ratio >= 0.8 ? "good" : ratio >= 0.5 ? "warn" : "bad";
+
+      const head = el("div", "card");
+      head.append(el("div", "score " + tone, r.passed + "/" + r.results.length));
+      head.append(el("div", "muted", "Audited " + r.finalUrl));
+      if (r.redirected) {
+        head.append(el("div", "muted", "Heads up: the site redirected, so this may not be the page you typed."));
+      }
+      out.append(head);
+
+      if (r.topFixes.length) {
+        const fix = el("div", "card");
+        fix.append(el("h2", "", "Fix these first"));
+        for (const f of r.topFixes) fix.append(row("✗", f));
+        out.append(fix);
+      }
+
+      const all = el("div", "card");
+      all.append(el("h2", "", "All checks"));
+      for (const c of r.results) all.append(row(c.pass ? "✓" : "✗", c));
+      out.append(all);
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const url = input.value.trim();
+      if (!url) return;
+
+      btn.disabled = true;
+      out.replaceChildren(el("p", "muted", "Auditing… this takes a few seconds."));
+      try {
+        const res = await fetch("/api/audit?url=" + encodeURIComponent(url));
+        let data;
+        try {
+              data = await res.json();
+            } catch {
+              throw new Error("The audit service isn't reachable. (Opened the page locally? The API only runs on the deployed site.)");
+            }
+        if (!res.ok) throw new Error(data.error ?? "Something went wrong");
+        render(data);
+      } catch (err) {
+        out.replaceChildren(el("div", "card error", err.message));
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

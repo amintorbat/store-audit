@@ -19,6 +19,7 @@
  */
 
 import * as cheerio from "cheerio";
+import { safeFetch } from "./safe-fetch";
 
 type Page = cheerio.CheerioAPI;
 
@@ -26,6 +27,7 @@ export type CheckResult = {
   name: string;
   pass: boolean;
   detail: string;
+  severity?: Severity; // set by runAudit, shown as a badge in the UI
 };
 
 export type AuditReport = {
@@ -65,16 +67,13 @@ function hostOf(u: string): string {
   return new URL(u).hostname.replace(/^www\./, "");
 }
 
-
 function checkViewport($: Page): CheckResult {
   const found = $('meta[name="viewport"]').length > 0;
 
   return {
     name: "viewport",
     pass: found,
-    detail: found
-      ? "viewport tag found"
-      : "missing viewport tag (bad on mobile)",
+    detail: found ? "viewport tag found" : "missing viewport tag (bad on mobile)",
   };
 }
 
@@ -91,9 +90,7 @@ function checkTitle($: Page): CheckResult {
   return {
     name: "title",
     pass: ok,
-    detail: ok
-      ? `title length OK (${len} chars)`
-      : `title is ${len} chars; aim for 30-60`,
+    detail: ok ? `title length OK (${len} chars)` : `title is ${len} chars; aim for 30-60`,
   };
 }
 
@@ -103,10 +100,7 @@ function checkH1($: Page): CheckResult {
   return {
     name: "h1",
     pass: count === 1,
-    detail:
-      count === 1
-        ? "exactly one h1"
-        : `found ${count} h1 tags; use exactly one`,
+    detail: count === 1 ? "exactly one h1" : `found ${count} h1 tags; use exactly one`,
   };
 }
 
@@ -116,17 +110,13 @@ function checkImageAlt($: Page): CheckResult {
   if (total === 0) {
     return { name: "image alt", pass: true, detail: "no images found" };
   }
-  const missing = imgs.filter(
-    (_, el) => $(el).attr("alt") === undefined,
-  ).length;
+  const missing = imgs.filter((_, el) => $(el).attr("alt") === undefined).length;
 
   return {
     name: "image alt",
     pass: missing === 0,
     detail:
-      missing === 0
-        ? `all ${total} images have alt`
-        : `${missing} of ${total} images missing alt`,
+      missing === 0 ? `all ${total} images have alt` : `${missing} of ${total} images missing alt`,
   };
 }
 
@@ -172,13 +162,12 @@ function checkProductSchema($: Page): CheckResult {
 
 // Turns Node's vague "fetch failed" into a sentence an owner can act on.
 export function explainError(e: unknown): string {
-  const err = e as Error & { cause?: { code?: string } };
-  const code = err.cause?.code;
+  const err = e as Error & { code?: string; cause?: { code?: string } };
+  const code = err.cause?.code ?? err.code;
 
   if (err.name === "TimeoutError") return "site took too long (over 10s)";
   if (code === "ENOTFOUND") return "domain not found (check the spelling)";
-  if (code === "ECONNRESET")
-    return "site closed the connection (down, or blocking bots)";
+  if (code === "ECONNRESET") return "site closed the connection (down, or blocking bots)";
   if (code?.startsWith("ERR_SSL"))
     return "HTTPS handshake failed (the site's SSL setup may be broken)";
   if (code) return `network error (${code})`;
@@ -249,10 +238,7 @@ function checkAiCrawlers(robots: string | null): CheckResult {
 
 async function fetchRobots(origin: string): Promise<string | null> {
   try {
-    const res = await fetch(origin + "/robots.txt", {
-      headers: { "User-Agent": "store-audit/0.1" },
-      signal: AbortSignal.timeout(10_000),
-    });
+    const { res } = await safeFetch(origin + "/robots.txt");
     return res.ok ? await res.text() : null;
   } catch {
     return null;
@@ -262,23 +248,16 @@ async function fetchRobots(origin: string): Promise<string | null> {
 function topFixes(results: CheckResult[], n = 3): CheckResult[] {
   return results
     .filter((r) => !r.pass) // filter returns a new array, so sort won't touch the original
-    .sort(
-      (a, b) =>
-        WEIGHT[SEVERITY[b.name] ?? "low"] - WEIGHT[SEVERITY[a.name] ?? "low"],
-    )
+    .sort((a, b) => WEIGHT[SEVERITY[b.name] ?? "low"] - WEIGHT[SEVERITY[a.name] ?? "low"])
     .slice(0, n);
 }
 
 // Returns data only (no console.log) so a web page can reuse this later.
 export async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
-  const res = await fetch(url, {
-    headers: { "User-Agent": "store-audit/0.1" },
-    signal: AbortSignal.timeout(10_000),
-  });
+  const { res, finalUrl } = await fetch(url);
 
-  const isProductPage = /\/products?\//i.test(res.url);
-
+  const isProductPage = /\/products?\//i.test(finalUrl);
   const body = await res.text();
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
@@ -291,7 +270,7 @@ export async function runAudit(input: string): Promise<AuditReport> {
     checkMetaDescription($),
   ];
 
-  const robots = await fetchRobots(new URL(res.url).origin);
+  const robots = await fetchRobots(new URL(finalUrl).origin);
   if (isProductPage) results.push(checkProductSchema($));
 
   results.push(checkAiCrawlers(robots));
@@ -303,13 +282,10 @@ export async function runAudit(input: string): Promise<AuditReport> {
 
   return {
     url,
-    finalUrl: res.url,
-    redirected: hostOf(res.url) !== hostOf(url),
+    finalUrl,
+    redirected: hostOf(finalUrl) !== hostOf(url),
     results: scored,
     passed: scored.filter((r) => r.pass).length,
     topFixes: topFixes(scored),
   };
 }
-
-
-
