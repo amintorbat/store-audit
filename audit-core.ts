@@ -9,12 +9,13 @@
  *  4. AI readiness: robots.txt parsing, fetchRobots, checkAiCrawlers
  *  5. topFixes + runAudit (fetch, run checks, return AuditReport)
  *
- * Done: 7 checks, timeout + readable errors, severity + top fixes, redirect flag
+ * Done: 7 checks, timeout + readable errors, severity + top fixes, redirect flag,
+ *       safe-fetch (SSRF guard), api/audit.ts (with rate limit), public/index.html
  *
  * TODO (P1 = before the Nov 9 event, P2 = if time, P3 = after):
- *  - P1 step 1: Vercel function api/audit.ts + simple page (input, score, fixes)
- *  - P1 step 2: block private/internal URLs before publishing the page
- *  - P1 step 3: scan 10-15 real small stores, pick 3 reports to show
+ *  - P1 step 1: deploy on Vercel + test the live URL
+ *  - P1 step 2: scan 10-15 real small stores, pick 3 reports to show
+ *  - P2 step 3: shared rate limit (current one is per server instance only)
  *  - P3 step 4: Playwright render, PageSpeed Insights, content freshness checks
  */
 
@@ -22,6 +23,8 @@ import * as cheerio from "cheerio";
 import { safeFetch } from "./safe-fetch";
 
 type Page = cheerio.CheerioAPI;
+
+export type Severity = "high" | "medium" | "low";
 
 export type CheckResult = {
   name: string;
@@ -38,8 +41,6 @@ export type AuditReport = {
   passed: number;
   topFixes: CheckResult[];
 };
-
-type Severity = "high" | "medium" | "low";
 
 const WEIGHT: Record<Severity, number> = { high: 3, medium: 2, low: 1 };
 
@@ -255,7 +256,7 @@ function topFixes(results: CheckResult[], n = 3): CheckResult[] {
 // Returns data only (no console.log) so a web page can reuse this later.
 export async function runAudit(input: string): Promise<AuditReport> {
   const url = normalizeUrl(input);
-  const { res, finalUrl } = await fetch(url);
+  const { res, finalUrl } = await safeFetch(url);
 
   const isProductPage = /\/products?\//i.test(finalUrl);
   const body = await res.text();

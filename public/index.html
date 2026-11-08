@@ -107,10 +107,10 @@
         const res = await fetch("/api/audit?url=" + encodeURIComponent(url));
         let data;
         try {
-              data = await res.json();
-            } catch {
-              throw new Error("The audit service isn't reachable. (Opened the page locally? The API only runs on the deployed site.)");
-            }
+          data = await res.json();
+        } catch {
+          throw new Error("The audit service isn't reachable. (Opened the page locally? The API only runs on the deployed site.)");
+        }
         if (!res.ok) throw new Error(data.error ?? "Something went wrong");
         render(data);
       } catch (err) {

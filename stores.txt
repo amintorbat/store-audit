@@ -6,6 +6,6 @@ jungalow.com
 littleotsu.com
 
 # outreach (owners asked for feedback publicly)
-ballisoulstudio.com
+# ballisoulstudio.com (cannot connect)
 tinynestluxury.store
-alwayssummershop.co.uk
+# alwayssummershop.co.uk (cannot connect)

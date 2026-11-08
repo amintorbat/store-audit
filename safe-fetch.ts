@@ -3,10 +3,10 @@
  * Known limit: DNS is checked before fetch, so a hostile DNS "rebinding" trick is not fully covered.
  */
 
-import { lookUp } from "node:dns/promises";
+import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
-function isPrivetIp(ip: string): boolean {
+function isPrivateIp(ip: string): boolean {
   if (isIP(ip) === 4) {
     const [a, b] = ip.split(".").map(Number);
     return (
@@ -23,13 +23,12 @@ function isPrivetIp(ip: string): boolean {
   const v = ip.toLowerCase();
 
   return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 169 && b === 254) || // link-local, includes cloud metadata
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) // carrier-grade NAT
+    v === "::1" ||
+    v === "::" ||
+    v.startsWith("fc") || // unique local
+    v.startsWith("fd") ||
+    v.startsWith("fe80") || // link-local
+    v.startsWith("::ffff:") // IPv4-mapped (e.g. ::ffff:127.0.0.1)
   );
 }
 
