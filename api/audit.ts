@@ -20,7 +20,7 @@ function tooMany(ip: string): boolean {
 
 export default {
   async fetch(request: Request) {
-    const ip = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
+    const ip = (request.headers.get("x-nf-client-connection-ip") ?? request.headers.get("x-forwarded-for"))?.split(",")[0].trim() ?? "unknown";
     if (tooMany(ip)) {
       return Response.json({ error: "Too many audits, wait a minute and retry" }, { status: 429 });
     }

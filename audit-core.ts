@@ -260,6 +260,8 @@ export async function runAudit(input: string): Promise<AuditReport> {
 
   const isProductPage = /\/products?\//i.test(finalUrl);
   const body = await res.text();
+  if (res.status === 403 || res.status === 429)
+    throw new Error("the site blocked our check (bot protection); try another page or store");
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
   const $ = cheerio.load(body);
